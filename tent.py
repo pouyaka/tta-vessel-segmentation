@@ -43,7 +43,12 @@ class Tent(nn.Module):
 @torch.jit.script
 def softmax_entropy(x: torch.Tensor) -> torch.Tensor:
     """Entropy of softmax distribution from logits."""
-    return -(x.softmax(1) * x.log_softmax(1)).sum(1)
+    probs = torch.sigmoid(x)
+    eps = 1e-8
+    entropy = -(probs * torch.log(probs+eps) + 
+                               (1 - probs) * torch.log(1 - probs+eps))
+
+    return entropy #-(x.softmax(1) * x.log_softmax(1)).sum(1)
 
 
 @torch.enable_grad()  # ensure grads in possible no grad context for testing
@@ -54,8 +59,10 @@ def forward_and_adapt(x, model, optimizer):
     """
     # forward
     outputs = model(x)
+    #print(torch.unique(outputs))
     # adapt
-    loss = softmax_entropy(outputs).mean(0)
+    loss = softmax_entropy(outputs).mean()
+    #print(f'loss: {loss.item()}')
     loss.backward()
     optimizer.step()
     optimizer.zero_grad()

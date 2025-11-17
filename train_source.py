@@ -6,22 +6,24 @@ import numpy as np
 import albumentations as A
 import sklearn.model_selection
 import matplotlib.pyplot as plt
+import csv
 from torchmetrics.segmentation import DiceScore, MeanIoU
+import os
 
-import networks, dataset, losses, metrics
+import networks, dataset, losses
 
 
 def main():
-    checkpoint = True
-    checkpoint_path = 'unet_hrf_weights.pth'
+    checkpoint = False
+    checkpoint_path = None
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    learning_rate = 1e-3
-    input_h, input_w = 256, 256
-    SOURCE_DATASET = 'HRF'
-    DATA_DIR = './HRF/all/'
+    LR = 5e-4
+    input_h, input_w = 512, 512
+    SOURCE_DATASET = 'CHASE'
+    DATA_DIR = './CHASE/'
     IMG_EXT = 'jpg', 'JPG', 'png'
-    MASK_EXT = 'tif', 'png', 'tif'
-    BATCH_SIZE = 4 
+    MASK_EXT = 'tif', 'png'
+    BATCH_SIZE = 8 
     NUM_WORKERS = 2
     EPOCHS = 100
 
@@ -30,8 +32,8 @@ def main():
     else:
         name = 'source'
     file_name = f"unet_{SOURCE_DATASET}_{name}"
-    log_filename = file_name + 'training_log.csv'
-    model_filename = file_name + 'weights.pth'
+    log_filename = 'training_log_' + file_name + '.csv'
+    model_filename = file_name + '_weights.pth'
 
     model = networks.UNet(in_channels=3, out_channels=1)
     if checkpoint:
@@ -40,8 +42,11 @@ def main():
     model = model.to(device)
     optim = torch.optim.Adam(
         (p for p in model.parameters() if p.requires_grad),
-        lr=learning_rate)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, mode='max', factor=0.8)
+        lr= LR)
+    scheduler = torch.optim.lr_scheduler.CyclicLR(optim,
+                                                    base_lr= 5e-5,
+                                                    max_lr= LR,
+                                                    step_size_up=8,)
     loss_fn = losses.BCEDiceLoss()
     train_dice = DiceScore(num_classes=2, include_background= False, average= 'macro').to(device)
     val_dice = DiceScore(num_classes=2, include_background= False, average= 'macro').to(device)
@@ -63,15 +68,20 @@ def main():
                                          img_ext= IMG_EXT, mask_ext= MASK_EXT,
                                          transform= train_transform)
     val_dataset = dataset.FundusDataset(dataset_name= SOURCE_DATASET,
-                                         data_dir= DATA_DIR+'val/' if SOURCE_DATASET == 'RITE' else DATA_DIR,
+                                         data_dir= DATA_DIR+'validation/' if SOURCE_DATASET == 'RITE' else DATA_DIR,
                                          img_ext= IMG_EXT, mask_ext= MASK_EXT,
                                          transform= val_transform)
     if SOURCE_DATASET == 'RITE':
+        test_rite = dataset.FundusDataset(dataset_name= "RITE", data_dir= './RITE/test/',
+                                        img_ext= IMG_EXT, mask_ext= MASK_EXT,
+                                        transform= val_transform)
+
         train_loader = torch.utils.data.DataLoader(train_dataset,
                                                  batch_size= BATCH_SIZE,
                                                  shuffle= True,
                                                  num_workers= NUM_WORKERS)
         val_loader = torch.utils.data.DataLoader(val_dataset, batch_size= BATCH_SIZE)
+        test_loader = torch.utils.data.DataLoader(test_rite, batch_size= BATCH_SIZE)
     else:
         num_data = len(train_dataset)
         indices = list(range(num_data))
@@ -83,8 +93,11 @@ def main():
         train_data = torch.utils.data.Subset(train_dataset, train_indices)
         val_data = torch.utils.data.Subset(val_dataset, val_indices)
 
-        train_loader = torch.utils.data.DataLoader(train_data, batch_size=4,shuffle=True, num_workers=2)
-        val_loader = torch.utils.data.DataLoader(val_data, batch_size=4)
+        train_loader = torch.utils.data.DataLoader(train_data,
+                                                   batch_size= BATCH_SIZE, 
+                                                   shuffle= True, 
+                                                   num_workers= NUM_WORKERS)
+        val_loader = torch.utils.data.DataLoader(val_data, batch_size= BATCH_SIZE)
     
 
     for epoch in range(EPOCHS):
@@ -101,6 +114,7 @@ def main():
             
             loss.backward()
             optim.step()
+            scheduler.step()
 
             if loss is not None:
                 train_loss += loss.item()
@@ -141,28 +155,32 @@ def main():
                 #            (1 - probs) * torch.log(1 - probs + epsilon))
 
         epoch_val_dice = val_dice.compute()
-        scheduler.step(epoch_val_dice)
         epoch_val_iou = val_iou.compute().item()
         val_dice.reset()
         val_iou.reset()
         current_lr = optim.param_groups[0]['lr']
         epoch_info = {
-            'epoch': epoch,
-            'lr': round(current_lr,5),
+            'epoch': epoch+1,
+            'lr': round(current_lr,6),
             'train_loss': round(train_loss/len(train_loader), 4),
-            'train dice': round(epoch_train_dice, 4)
+            'train dice': round(epoch_train_dice, 4),
             'val_loss': round(val_loss/len(val_loader), 4),
-            'val dice': round(epoch_val_dice.item(), 4),
-            'val mIOU' : round(epoch_val_iou, 4),
+            'val_dice': round(epoch_val_dice.item(), 4),
+            'val_mIOU' : round(epoch_val_iou, 4),
         }
         print(epoch_info)
 
-        with open(log_filename, 'w', newline='') as f:
-            writer = csv.writer(f)
+        file_exists = os.path.isfile(log_filename)
+        with open(log_filename, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=epoch_info.keys())
+
+            # write header only once
+            if not file_exists:
+                writer.writeheader()
+
             writer.writerow(epoch_info)
         
     torch.save(model.state_dict(), model_filename)
-
 
 
 if __name__ == '__main__':

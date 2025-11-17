@@ -9,7 +9,7 @@ class BCEDiceLoss(nn.Module):
     This is particularly useful for imbalanced datasets.
     """
     
-    def __init__(self, bce_weight=0.1, dice_weight=0.9, smooth=1e-7):
+    def __init__(self, bce_weight=0.5, dice_weight=0.5, smooth=1e-7):
         """
         Args:
             bce_weight (float): Weight for BCE loss component
