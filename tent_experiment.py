@@ -143,8 +143,8 @@ def main():
         }
 
         
-        print(f'\n {config['name']}')
-        print(f'  Learning rate:   {config['lr']}')
+        print(f"\n {config['name']}")
+        print(f"  Learning rate:   {config['lr']}")
         print(f"  Dice:   {info['mean_dice']:.4f} ± {info['std_dice']:.4f}")
         print(f"  IOU:   {info['mean_iou']:.4f} ± {info['std_iou']:.4f}")
         print(f"  Entropy: {info['mean_entropy']:.4f}")
